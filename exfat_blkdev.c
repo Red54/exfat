@@ -158,19 +158,27 @@ INT32 bdev_reada(struct super_block *sb, UINT32 secno, UINT32 num_secs)
 {
 	BD_INFO_T *p_bd = &(EXFAT_SB(sb)->bd_info);
 	UINT32 sects_per_page = (PAGE_SIZE >> sb->s_blocksize_bits);
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
 	struct blk_plug plug;
+#endif
 	UINT32 i;
 
 	if (!p_bd->opened)
 		return (FFS_MEDIAERR);
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
 	blk_start_plug(&plug);
+#endif
 	for (i = 0; i < num_secs; i++) {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
 		if (i && !(i & (sects_per_page - 1)))
 			blk_flush_plug_list(&plug, false);
+#endif
 		sb_breadahead(sb, secno + i);
 	}
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
 	blk_finish_plug(&plug);
+#endif
 
 	return 0;
 }

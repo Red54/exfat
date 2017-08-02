@@ -90,6 +90,9 @@
 #include <linux/fs_struct.h>
 #include <linux/namei.h>
 #include <linux/vmalloc.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
+#include <linux/user_namespace.h>
+#endif
 #include <asm/current.h>
 #include <asm/unaligned.h>
 
@@ -363,16 +366,26 @@ static void __set_sb_clean(struct super_block *sb)
 
 static void exfat_msg(struct super_block *sb, const char *level, const char *fmt, ...)
 {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,35)
 	struct va_format vaf;
+#else
+	char msg[1024];
+#endif
 	va_list args;
 	struct block_device *bdev = sb->s_bdev;
 	dev_t bd_dev = bdev ? bdev->bd_dev : 0;
 
 	va_start(args, fmt);
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,35)
 	vaf.fmt = fmt;
 	vaf.va = &args;
 	printk("%s[EXFAT] (%s[%d:%d]): %pV\n", level,
 			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev), &vaf);
+#else
+	vsnprintf(msg, sizeof(msg), fmt, args);
+	printk("%s[EXFAT] (%s[%d:%d]): %s\n", level,
+			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev), msg);
+#endif
 	va_end(args);
 }
 
@@ -433,6 +446,8 @@ static int exfat_revalidate_ci(struct dentry *dentry, struct nameidata *nd)
 
 	flags = nd ? nd->flags : 0;
 #else
+	unsigned int flags;
+
 	flags = nd ? nd->flags : 0;
 #endif
 
@@ -787,6 +802,8 @@ static long exfat_generic_ioctl(struct file *filp,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,1,0)
 static int exfat_file_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+static int exfat_file_fsync(struct file *filp, struct dentry *dentry, int datasync)
 #else
 static int exfat_file_fsync(struct file *filp, int datasync)
 #endif
@@ -797,6 +814,8 @@ static int exfat_file_fsync(struct file *filp, int datasync)
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,1,0)
 	res = generic_file_fsync(filp, start, end, datasync);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	res = simple_fsync(filp, dentry, datasync);
 #else
 	res = generic_file_fsync(filp, datasync);
 #endif
@@ -1354,7 +1373,12 @@ static int exfat_cont_expand(struct inode *inode, loff_t size)
 		err2 = write_inode_now(inode, 1);
 		err = (err)?(err):(err2);
 		if (!err) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+			err =  wait_on_page_writeback_range(mapping, start >> PAGE_CACHE_SHIFT,
+					(start + count - 1) >> PAGE_CACHE_SHIFT);
+#else
 			err =  filemap_fdatawait_range(mapping, start, start + count - 1);
+#endif
 		}
 	}
 	return err;
@@ -2490,6 +2514,7 @@ static int exfat_read_root(struct inode *inode)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,37)
 static void setup_dops(struct super_block *sb)
 {
 	if (EXFAT_SB(sb)->options.casesensitive == 0)
@@ -2497,6 +2522,7 @@ static void setup_dops(struct super_block *sb)
 	else
 		sb->s_d_op = &exfat_dentry_ops;
 }
+#endif
 
 
 static int exfat_fill_super(struct super_block *sb, void *data, int silent)
@@ -2511,11 +2537,18 @@ static int exfat_fill_super(struct super_block *sb, void *data, int silent)
 
 	sbi = kzalloc(sizeof(struct exfat_sb_info), GFP_KERNEL);
 	if (!sbi) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
+		sbi = vmalloc(sizeof(struct exfat_sb_info));
+#else
 		sbi = vzalloc(sizeof(struct exfat_sb_info));
+#endif
 		if (!sbi) {
 			exfat_mnt_msg(sb, 1, 0, "failed to mount! (ENOMEM)");
 			return -ENOMEM;
 		}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
+		memset(sbi, 0, sizeof(struct exfat_sb_info));
+#endif
 		sbi->use_vmalloc = 1;
 	}
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
@@ -2531,7 +2564,9 @@ static int exfat_fill_super(struct super_block *sb, void *data, int silent)
 	if (error)
 		goto out_fail;
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,37)
 	setup_dops(sb);
+#endif
 
 	error = -EIO;
 	sb_min_blocksize(sb, 512);
